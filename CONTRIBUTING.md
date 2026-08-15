@@ -23,14 +23,21 @@ Comandos habituales:
 | `npm start` | Ejecuta el build compilado. |
 | `npm run inspect` | Abre el MCP Inspector contra el servidor para probar tools a mano. |
 
-Dos convenciones del proyecto que conviene tener presentes antes de tocar
-código:
+## Convenciones de código
 
-- **stdout es sagrado.** Con el transporte `stdio`, stdout está reservado para
-  los mensajes JSON-RPC. Un `console.log` perdido corrompe el protocolo en
-  silencio. Todo log va a stderr, vía `src/logger.ts`.
-- **Rutas de Windows.** Construye rutas siempre con `path.join` / `path.resolve`,
-  nunca concatenando strings con `+` ni con template literals.
+Dos reglas que conviene tener presentes antes de tocar código:
+
+**stdout está reservado para el protocolo.** Con el transporte `stdio`, stdout
+transporta exclusivamente los mensajes JSON-RPC del protocolo MCP. Cualquier
+escritura ajena —un `console.log` olvidado, la salida de una librería— corrompe
+el stream en silencio y el cliente deja de entender al servidor, normalmente sin
+un error claro que lo delate. Todo el logging va a stderr a través de
+`src/logger.ts`; usa ese módulo y nunca `console.log`.
+
+**Las rutas se construyen con `path.join`.** El proyecto es Windows-first, así
+que arma siempre las rutas con `path.join` o `path.resolve`, nunca concatenando
+strings con `+` ni con template literals. Mezclar separadores a mano rompe en
+cuanto una ruta lleva espacios o se compara con la que devuelve el sistema.
 
 ## Smoke tests antes de un PR
 
@@ -62,7 +69,9 @@ chore: bump playwright-core to 1.49
 
 Prefijos en uso: `feat:`, `fix:`, `chore:`, `docs:`, `refactor:`, `test:`.
 
-No añadas trailers a los commits (`Co-Authored-By` ni similares).
+El asunto va en imperativo y en minúscula, sin punto final, y describe el
+cambio en una línea. Si necesitas más contexto, va en el cuerpo del commit
+separado por una línea en blanco.
 
 ## Flujo de PR
 
