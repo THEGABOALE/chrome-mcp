@@ -117,10 +117,21 @@ async function buildSession(browser: Browser): Promise<BrowserSession> {
   const contexts = browser.contexts();
   const context =
     contexts.length > 0 ? contexts[0] : await browser.newContext();
+  const built: BrowserSession = { browser, context };
+
+  // The real signal that the browser is gone (crash, external close, or our
+  // own shutdown) — drop the singleton so the next ensureBrowser() reconnects.
+  browser.on("disconnected", () => {
+    if (session === built) {
+      logger.warn("Browser connection lost; clearing session");
+      session = null;
+    }
+  });
+
   logger.info(
     `Browser session ready (${context.pages().length} open page(s))`,
   );
-  return { browser, context };
+  return built;
 }
 
 /**
@@ -150,14 +161,14 @@ function launchChrome(): void {
     logger.error("Chrome process error", err);
   });
   child.on("exit", (code, signal) => {
-    logger.warn(`Chrome process exited (code=${code}, signal=${signal})`);
-    // If Chrome dies on its own, drop the stale session so the next
-    // ensureBrowser() re-launches instead of using a dead connection.
-    if (chromeProcess === child) {
-      session = null;
-      chromeProcess = null;
-      launchedByUs = false;
-    }
+    // On Windows the chrome.exe we spawn is typically a launcher stub that
+    // hands off to the real browser process and exits (code 0) almost
+    // immediately. That is NOT the browser dying, so we must not touch
+    // ownership state here — loss of the actual connection is detected via
+    // the Browser 'disconnected' event instead.
+    logger.debug(
+      `Spawned chrome.exe launcher exited (code=${code}, signal=${signal})`,
+    );
   });
 
   chromeProcess = child;
@@ -333,20 +344,36 @@ export async function closeBrowser(): Promise<void> {
   chromeProcess = null;
   launchedByUs = false;
 
-  try {
-    // For a CDP connection, browser.close() disconnects Playwright but does
-    // NOT terminate Chrome — so this is the "disconnect" step in both cases.
-    await current.browser.close();
-  } catch (err) {
-    logger.error("Error disconnecting from browser", err);
-  }
-
   if (weOwnIt) {
+    // We launched Chrome, so terminate it. The chrome.exe we spawned is only
+    // a launcher stub that has already exited, so its pid can't kill the real
+    // browser — ask the browser itself to exit over CDP.
+    logger.info("Closing the Chrome instance we launched");
+    try {
+      const cdp = await current.browser.newBrowserCDPSession();
+      await cdp.send("Browser.close");
+    } catch (err) {
+      logger.warn(
+        "CDP Browser.close failed; falling back to killing the spawned process",
+        err,
+      );
+    }
+    // Best-effort: kill the spawned handle too, in case it is still alive.
     if (ownedProcess && ownedProcess.exitCode === null) {
-      logger.info("Terminating the Chrome process we launched");
       ownedProcess.kill();
     }
-  } else {
+  }
+
+  try {
+    // For a CDP connection, browser.close() just disconnects Playwright (it
+    // does not terminate Chrome). After Browser.close above it may already be
+    // gone, so ignore errors.
+    await current.browser.close();
+  } catch {
+    /* already disconnected */
+  }
+
+  if (!weOwnIt) {
     logger.info("Disconnected from pre-existing Chrome (left it running)");
   }
 }
