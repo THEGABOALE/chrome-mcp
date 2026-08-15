@@ -15,8 +15,7 @@ depurar consola y red.
 
 No es un fork ni una reimplementación del conector de Anthropic: es una
 alternativa independiente, pensada específicamente para las particularidades de
-Windows (descubrimiento de `chrome.exe`, perfil de usuario separado, y el
-manejo de procesos huérfanos que se describe más abajo).
+Windows (más abajo).
 
 ## Requisitos
 
