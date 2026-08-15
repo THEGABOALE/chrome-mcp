@@ -8,7 +8,8 @@
     "dev": "tsx watch src/index.ts",
     "start": "node dist/index.js",
     "inspect": "npx @modelcontextprotocol/inspector node dist/index.js",
-    "smoke:browser": "tsx scripts/smoke-browser.ts"
+    "smoke:browser": "tsx scripts/smoke-browser.ts",
+    "smoke:tools": "tsx scripts/smoke-tools.ts"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.0.0",
