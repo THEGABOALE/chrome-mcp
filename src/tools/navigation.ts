@@ -8,6 +8,7 @@ import { z } from "zod";
 import { config } from "../config.js";
 import { logger } from "../logger.js";
 import { getPage, listTabs as listBrowserTabs } from "../browser.js";
+import { checkDomainAllowed } from "./security.js";
 import {
   type ToolResult,
   textResult,
@@ -37,15 +38,9 @@ export async function navigate(input: unknown): Promise<ToolResult> {
   const { url, waitUntil } = parsed.data;
 
   // Domain allow-list check (empty list = everything allowed).
-  const hostname = new URL(url).hostname;
-  if (
-    config.allowedDomains.length > 0 &&
-    !config.allowedDomains.includes(hostname)
-  ) {
-    return errorResult(
-      `Navigation to "${hostname}" is blocked. Allowed domains: ` +
-        `${config.allowedDomains.join(", ")}. Add it to ALLOWED_DOMAINS to permit it.`,
-    );
+  const blocked = checkDomainAllowed(url, "navigate to");
+  if (blocked) {
+    return errorResult(blocked);
   }
 
   try {

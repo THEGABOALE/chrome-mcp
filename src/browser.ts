@@ -22,6 +22,7 @@ import {
   type Browser,
   type BrowserContext,
   type Page,
+  type Request,
 } from "playwright-core";
 import { config } from "./config.js";
 import { logger } from "./logger.js";
@@ -35,6 +36,103 @@ export interface TabInfo {
   id: string;
   title: string;
   url: string;
+}
+
+export interface ConsoleEntry {
+  type: string;
+  text: string;
+  timestamp: number;
+}
+
+export interface NetworkEntry {
+  method: string;
+  url: string;
+  status: number | null;
+  durationMs: number | null;
+  startedAt: number;
+  timestamp: number;
+  failure?: string;
+}
+
+interface PageBuffers {
+  console: ConsoleEntry[];
+  requests: NetworkEntry[];
+}
+
+/**
+ * Per-page circular buffers. Playwright only surfaces console/network events
+ * live (never retroactively), so we subscribe as soon as a page appears and
+ * keep the most recent entries of each kind to bound memory.
+ */
+const MAX_CAPTURE_ENTRIES = 200;
+const pageBuffers = new WeakMap<Page, PageBuffers>();
+const requestEntries = new WeakMap<Request, NetworkEntry>();
+
+function pushCapped<T>(buffer: T[], entry: T): void {
+  buffer.push(entry);
+  if (buffer.length > MAX_CAPTURE_ENTRIES) {
+    buffer.shift();
+  }
+}
+
+/** Subscribes to a page's console and network events. Idempotent per page. */
+function attachPageListeners(page: Page): void {
+  if (pageBuffers.has(page)) {
+    return;
+  }
+  const buffers: PageBuffers = { console: [], requests: [] };
+  pageBuffers.set(page, buffers);
+
+  page.on("console", (message) => {
+    pushCapped(buffers.console, {
+      type: message.type(),
+      text: message.text(),
+      timestamp: Date.now(),
+    });
+  });
+
+  page.on("request", (request) => {
+    const entry: NetworkEntry = {
+      method: request.method(),
+      url: request.url(),
+      status: null,
+      durationMs: null,
+      startedAt: Date.now(),
+      timestamp: Date.now(),
+    };
+    requestEntries.set(request, entry);
+    pushCapped(buffers.requests, entry);
+  });
+
+  page.on("response", (response) => {
+    const entry = requestEntries.get(response.request());
+    if (entry) {
+      entry.status = response.status();
+      entry.durationMs = Date.now() - entry.startedAt;
+    }
+  });
+
+  page.on("requestfailed", (request) => {
+    const entry = requestEntries.get(request);
+    if (entry) {
+      entry.durationMs = Date.now() - entry.startedAt;
+      entry.failure = request.failure()?.errorText ?? "request failed";
+    }
+  });
+
+  page.on("close", () => {
+    pageBuffers.delete(page);
+  });
+}
+
+/** Returns the captured console entries for a page (oldest first). */
+export function getConsoleLogs(page: Page): ConsoleEntry[] {
+  return pageBuffers.get(page)?.console.slice() ?? [];
+}
+
+/** Returns the captured network entries for a page (oldest first). */
+export function getNetworkRequests(page: Page): NetworkEntry[] {
+  return pageBuffers.get(page)?.requests.slice() ?? [];
 }
 
 /** Exponential-backoff schedule for reconnecting after a launch. */
@@ -128,6 +226,12 @@ async function buildSession(browser: Browser): Promise<BrowserSession> {
       session = null;
     }
   });
+
+  // Capture console/network on all current and future pages of this context.
+  for (const page of context.pages()) {
+    attachPageListeners(page);
+  }
+  context.on("page", (page) => attachPageListeners(page));
 
   logger.info(
     `Browser session ready (${context.pages().length} open page(s))`,
@@ -403,7 +507,9 @@ export async function getPage(tabId?: string): Promise<Page> {
 
   if (pages.length === 0) {
     logger.debug("No open pages; creating a new one");
-    return current.context.newPage();
+    const page = await current.context.newPage();
+    attachPageListeners(page);
+    return page;
   }
   return pages[pages.length - 1];
 }
