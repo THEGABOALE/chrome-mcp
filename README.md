@@ -214,3 +214,13 @@ están en [CONTRIBUTING.md](CONTRIBUTING.md).
 ## Licencia
 
 MIT — ver [LICENSE](LICENSE).
+
+## Author
+
+Creado por [@THEGABOALE](https://github.com/THEGABOALE).
+
+## Contributors
+
+<a href="https://github.com/THEGABOALE/chrome-mcp/graphs/contributors">
+  <img src="https://contrib.rocks/image?repo=THEGABOALE/chrome-mcp" />
+</a>
