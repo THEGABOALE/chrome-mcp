@@ -13,9 +13,10 @@
  * All diagnostic output goes through the stderr logger — never console.log.
  */
 
-import { spawn, type ChildProcess } from "node:child_process";
+import { spawn, execFile, type ChildProcess } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
+import { promisify } from "node:util";
 import {
   chromium,
   type Browser,
@@ -219,8 +220,108 @@ async function connectWithBackoff(): Promise<Browser> {
   }
 }
 
+const execFileAsync = promisify(execFile);
+
+function escapeRegExp(text: string): string {
+  return text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+/**
+ * Windows-only, best-effort mitigation for orphaned Chrome. Windows has no
+ * catchable SIGTERM, so a hard-killed server (as MCP clients do on shutdown)
+ * can leave Chrome running. On startup we terminate any chrome.exe left over
+ * from a PREVIOUS chrome-mcp session — identified by BOTH our exact
+ * --user-data-dir and --remote-debugging-port on its command line, so we never
+ * touch a user's own Chrome. This keeps orphans from piling up across restarts.
+ *
+ * Never throws: if detection fails (PowerShell missing, permissions, parse
+ * error) it logs a warning and lets startup proceed with a normal launch.
+ */
+async function reclaimOrphanedChrome(): Promise<void> {
+  if (process.platform !== "win32") {
+    return;
+  }
+
+  const uddPattern = new RegExp(
+    `--user-data-dir="?${escapeRegExp(config.chromeUserDataDir)}`,
+    "i",
+  );
+  const portPattern = new RegExp(
+    `--remote-debugging-port=${config.cdpPort}(?![0-9])`,
+  );
+
+  let processes: Array<{ ProcessId: number; CommandLine: string | null }>;
+  try {
+    // Single-quoted PS script (no double quotes) so Node's arg quoting is safe.
+    const script =
+      "ConvertTo-Json -Compress -InputObject @(" +
+      "Get-CimInstance Win32_Process -ErrorAction Stop | " +
+      "Where-Object { $_.Name -eq 'chrome.exe' } | " +
+      "Select-Object ProcessId, CommandLine)";
+    const { stdout } = await execFileAsync(
+      "powershell.exe",
+      ["-NoProfile", "-NonInteractive", "-Command", script],
+      { timeout: 10_000, windowsHide: true, maxBuffer: 8 * 1024 * 1024 },
+    );
+    const trimmed = stdout.trim();
+    const parsed: unknown = trimmed ? JSON.parse(trimmed) : [];
+    processes = Array.isArray(parsed)
+      ? (parsed as Array<{ ProcessId: number; CommandLine: string | null }>)
+      : [parsed as { ProcessId: number; CommandLine: string | null }];
+  } catch (err) {
+    logger.warn(
+      "Could not scan for orphaned Chrome processes; continuing with launch",
+      err,
+    );
+    return;
+  }
+
+  const orphanPids = processes
+    .filter(
+      (proc) =>
+        typeof proc.CommandLine === "string" &&
+        uddPattern.test(proc.CommandLine) &&
+        portPattern.test(proc.CommandLine),
+    )
+    .map((proc) => proc.ProcessId)
+    .filter((pid) => Number.isInteger(pid) && pid > 0);
+
+  if (orphanPids.length === 0) {
+    logger.debug("No orphaned chrome-mcp Chrome processes to reclaim");
+    return;
+  }
+
+  logger.info(
+    `Reclaiming ${orphanPids.length} orphaned chrome-mcp Chrome process(es) ` +
+      `from a previous session: PID(s) ${orphanPids.join(", ")}`,
+  );
+
+  try {
+    await execFileAsync(
+      "taskkill",
+      ["/F", ...orphanPids.flatMap((pid) => ["/PID", String(pid)])],
+      { timeout: 10_000, windowsHide: true },
+    );
+    logger.info(`Reclaimed ${orphanPids.length} orphaned Chrome process(es)`);
+  } catch (err) {
+    // taskkill exits non-zero when a PID already died (Chrome children exit
+    // with the browser process). Best-effort — not a startup failure.
+    logger.debug(
+      `taskkill reported an issue (some PIDs may have already exited): ${
+        err instanceof Error ? err.message : String(err)
+      }`,
+    );
+  }
+}
+
 async function doEnsureBrowser(): Promise<BrowserSession> {
   const endpoint = cdpEndpoint();
+
+  // Best-effort: kill any orphaned Chrome from a previous chrome-mcp session
+  // BEFORE connecting, so we don't re-attach to (and re-leak) our own orphan.
+  // Windows-only; a no-op on other platforms. Runs on both the attach and the
+  // launch paths.
+  await reclaimOrphanedChrome();
 
   // 1. Try to attach to an already-running Chrome. If this succeeds we did
   //    not launch it, so we must not kill it on shutdown.
