@@ -45,6 +45,7 @@ const envSchema = z.object({
         : path.join("C:", "chrome-mcp-profile"),
     ),
   CDP_PORT: intFromEnv(9222),
+  CDP_CONNECT_TIMEOUT_MS: intFromEnv(10_000),
   ALLOWED_DOMAINS: z
     .string()
     .optional()
@@ -76,6 +77,7 @@ export type Config = {
   readonly chromePath: string | undefined;
   readonly chromeUserDataDir: string;
   readonly cdpPort: number;
+  readonly cdpConnectTimeoutMs: number;
   readonly allowedDomains: readonly string[];
   readonly allowEval: boolean;
   readonly defaultTimeoutMs: number;
@@ -87,6 +89,7 @@ export const config: Config = Object.freeze({
   chromePath: parsed.data.CHROME_PATH,
   chromeUserDataDir: parsed.data.CHROME_USER_DATA_DIR,
   cdpPort: parsed.data.CDP_PORT,
+  cdpConnectTimeoutMs: parsed.data.CDP_CONNECT_TIMEOUT_MS,
   allowedDomains: Object.freeze(parsed.data.ALLOWED_DOMAINS),
   allowEval: parsed.data.ALLOW_EVAL,
   defaultTimeoutMs: parsed.data.DEFAULT_TIMEOUT_MS,
